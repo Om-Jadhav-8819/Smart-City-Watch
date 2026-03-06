@@ -49,6 +49,15 @@ const ASSET_META: Record<string, { label: string, icon: React.ReactNode, color: 
   healthcare: { label: "Healthcare", icon: <Hospital size={16} />, color: "#EC4899" }
 };
 
+const VIEWS = [
+  { id: "Dashboard", label: "Dashboard", icon: <LayoutDashboard size={16} /> },
+  { id: "Predictions", label: "Predictions", icon: <TrendingUp size={16} /> },
+  { id: "Cascade Sim", label: "Cascade Sim", icon: <Share2 size={16} /> },
+  { id: "What-If Engine", label: "What-If Engine", icon: <Settings size={16} /> },
+  { id: "Public Portal", label: "Public Portal", icon: <Globe size={16} /> },
+  { id: "cityassist", label: "CityAssist AI", icon: "🤖" }
+];
+
 const REMEDIATIONS = {
   roads: ["Deploy dynamic lane management", "Activate public transit subsidies", "Reroute heavy freight traffic"],
   power: ["Engage peak-shaving battery reserves", "Initiate industrial load shedding", "Activate emergency gas turbines"],
@@ -221,13 +230,18 @@ export default function App() {
   const [view, setView] = useState("Dashboard");
   const [tick, setTick] = useState(0);
   const [simTime, setSimTime] = useState(8); // Start at 8 AM
+  const [simHour, setSimHour] = useState(8);
   const [history, setHistory] = useState<HistoryData>({});
   const [cascade, setCascade] = useState<CascadeState>({ triggerZone: null, triggerAsset: null, affectedZones: [] });
 
   // Simulation Loop
   useEffect(() => {
     const interval = setInterval(() => {
-      setSimTime(prev => (prev + 0.2) % 24); // Each tick is ~12 minutes
+      setSimTime(prev => {
+        const next = (prev + 0.2) % 24;
+        setSimHour(Math.floor(next));
+        return next;
+      });
       setZones(prev => prev.map((z) => {
         const newDrift = { ...z.drift };
         const newAssets = { ...z.assets };
@@ -365,17 +379,17 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1 }}>
-          {["Dashboard", "Predictions", "Cascade Sim", "What-If Engine", "Public Portal"].map(v => (
+          {VIEWS.map(v => (
             <div
-              key={v}
-              onClick={() => setView(v)}
+              key={v.id}
+              onClick={() => setView(v.id)}
               style={{
                 padding: "12px 24px",
                 cursor: "pointer",
                 fontSize: "13px",
-                color: view === v ? COLORS.text : COLORS.dim,
-                backgroundColor: view === v ? "rgba(96, 165, 250, 0.05)" : "transparent",
-                borderLeft: `3px solid ${view === v ? COLORS.accent : "transparent"}`,
+                color: view === v.id ? COLORS.text : COLORS.dim,
+                backgroundColor: view === v.id ? "rgba(96, 165, 250, 0.05)" : "transparent",
+                borderLeft: `3px solid ${view === v.id ? COLORS.accent : "transparent"}`,
                 transition: "all 0.2s",
                 display: "flex",
                 alignItems: "center",
@@ -383,13 +397,9 @@ export default function App() {
               }}
             >
               <span style={{ fontSize: "16px", display: "flex", alignItems: "center" }}>
-                {v === "Dashboard" ? <LayoutDashboard size={16} /> : 
-                 v === "Predictions" ? <TrendingUp size={16} /> : 
-                 v === "Cascade Sim" ? <Share2 size={16} /> : 
-                 v === "What-If Engine" ? <Settings size={16} /> : 
-                 <Globe size={16} />}
+                {v.icon}
               </span>
-              {v}
+              {v.label}
             </div>
           ))}
         </div>
@@ -407,6 +417,7 @@ export default function App() {
         {view === "Cascade Sim" && <CascadeView zones={zones} trigger={triggerCascade} reset={resetSim} cascade={cascade} />}
         {view === "What-If Engine" && <WhatIfView zones={zones} />}
         {view === "Public Portal" && <PublicView zones={zones} health={health} />}
+        {view === "cityassist" && <CityAssistView zones={zones} simHour={simHour} />}
       </div>
     </div>
   );
@@ -1082,6 +1093,373 @@ function KPICard({ label, value, color, icon }: { label: string, value: string |
         <div style={{ fontSize: "32px", fontWeight: "bold", color }}>{value}</div>
       </div>
       <div style={{ color: `${color}66` }}>{icon}</div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════
+// 10. CITYASSIST AI HELPDESK
+// ════════════════════════════════════════
+
+async function callGemini(apiKey: string, systemPrompt: string, chatHistory: any[]) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: chatHistory.map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }]
+    })),
+    generationConfig: { temperature: 0.7, maxOutputTokens: 400 }
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `API Error ${res.status}`);
+  }
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text 
+    || "Sorry, I couldn't get a response. Please try again.";
+}
+
+function buildCityContext(zones: Zone[], simHour: number) {
+  const ASSET_LABELS: Record<string, string> = {
+    roads: "Roads", power: "Power Grid",
+    water: "Water Supply", healthcare: "Healthcare"
+  };
+  const statusOf = (u: number) => u >= 90 ? "CRITICAL" : u >= 75 ? "WARNING" : "NORMAL";
+  const getAvgUtil = (z: Zone) => {
+    const vals = Object.values(z.assets);
+    return vals.reduce((s, v) => s + v, 0) / vals.length;
+  };
+
+  let ctx = `Simulated time: ${String(simHour).padStart(2,"0")}:00\n\nLIVE CITY STATUS:\n`;
+  zones.forEach(z => {
+    const avg = getAvgUtil(z);
+    ctx += `\n${z.name} (Pop: ${Math.round(z.population/1000)}k) — ${statusOf(avg)} (${Math.round(avg)}% avg)\n`;
+    Object.entries(z.assets).forEach(([k, val]) => {
+      ctx += `  ${ASSET_LABELS[k]}: ${Math.round(val)}% — ${statusOf(val)}\n`;
+    });
+  });
+  return ctx;
+}
+
+function CityAssistView({ zones, simHour }: { zones: Zone[], simHour: number }) {
+  const [messages, setMessages] = React.useState<any[]>([
+    { 
+      role: "assistant", 
+      content: "👋 Hi! I'm CityAssist — your AI helpdesk for city infrastructure. I have live access to all 9 zone statuses right now. Ask me anything — power cuts, water issues, road problems, or just 'is my area safe?' — I'll give you a real answer.", 
+      time: new Date() 
+    }
+  ]);
+  const [input, setInput] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [apiKey, setApiKey] = React.useState("");
+  const [showKeyInput, setShowKeyInput] = React.useState(true);
+  
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+
+  const systemPrompt = useMemo(() => `You are CityAssist, an AI citizen helpdesk for a smart city infrastructure platform.
+
+YOUR ROLE: Help ordinary citizens understand infrastructure issues in their city 
+and tell them exactly what to do. You are NOT talking to engineers or officials.
+
+LIVE DATA YOU HAVE RIGHT NOW:
+${buildCityContext(zones, simHour)}
+
+STATUS THRESHOLDS:
+- NORMAL (0-74%): All good, no action needed
+- WARNING (75-89%): Elevated stress, be cautious
+- CRITICAL (90%+): Serious issue, take immediate action
+
+EMERGENCY CONTACTS:
+- City Helpline: 1800-CITY-HELP
+- Power Emergency: 1800-PWR-ALERT  
+- Water Authority: 1800-WATER-911
+- Traffic Control: 1800-TRAF-CTRL
+- Medical Emergency: 102
+
+WHEN A CITIZEN REPORTS A PROBLEM:
+1. Show empathy first (1 sentence)
+2. Tell them the ACTUAL current status from the live data above
+3. Give exactly 2-3 practical steps they can do RIGHT NOW
+4. Give the relevant emergency contact number
+5. Total response: max 5 sentences
+
+WHEN ASKED ABOUT A ZONE STATUS:
+- Give a plain-English summary using the live data
+- Highlight any WARNING or CRITICAL services  
+- Suggest what citizens should do or avoid
+
+TONE RULES — STRICTLY FOLLOW:
+✓ Simple everyday language, no technical terms
+✓ Calm and reassuring, never alarmist
+✓ Use relevant emojis to feel warm and approachable
+✓ Be concise — citizens want quick answers
+✗ NEVER say "utilization percentage" or any engineering term
+✗ NEVER mention that the data is simulated
+✗ NEVER give medical diagnosis
+✗ NEVER mention "linear regression" or "mean reversion"`, [zones, simHour]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, loading]);
+
+  const handleSend = async (text?: string) => {
+    const trimmed = (text || input).trim();
+    if (!trimmed || loading) return;
+    if (!apiKey.trim()) {
+      setError("Please enter your Gemini API key above to use CityAssist.");
+      return;
+    }
+    setError(null);
+    setInput("");
+    const userMsg = { role: "user", content: trimmed, time: new Date() };
+    setMessages(prev => [...prev, userMsg]);
+    setLoading(true);
+    try {
+      const history = [...messages, userMsg];
+      const reply = await callGemini(apiKey, systemPrompt, history);
+      setMessages(prev => [...prev, { role: "assistant", content: reply, time: new Date() }]);
+    } catch (e: any) {
+      setError(e.message);
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: "⚠️ Connection issue. Please check your API key or call 1800-CITY-HELP directly.",
+        time: new Date()
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const quickReplies = [
+    "Is my area safe right now?",
+    "No water supply — what do I do?",
+    "Power outage — need help",
+    "Which zones are critical?",
+    "Road blocked near me",
+    "Give me emergency numbers",
+    "What to do during power cut?",
+    "How bad is City Core right now?"
+  ];
+
+  const criticalZonesCount = zones.filter(z => avgUtil(z.assets) >= 90).length;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 80px)", animation: "fadeIn 0.5s ease-out" }}>
+      {/* HEADER */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ fontSize: "24px" }}>🤖</span>
+            <h2 style={{ margin: 0, fontSize: "24px", fontWeight: "bold" }}>CityAssist</h2>
+          </div>
+          <div style={{ fontSize: "12px", color: COLORS.dim, marginTop: "4px" }}>Powered by Gemini 2.0 Flash · Citizen AI Helpdesk</div>
+        </div>
+        {criticalZonesCount > 0 && (
+          <div style={{ backgroundColor: `${COLORS.critical}22`, color: COLORS.critical, padding: "8px 16px", borderRadius: "8px", fontSize: "12px", fontWeight: "bold", display: "flex", alignItems: "center", gap: "8px" }}>
+            <AlertTriangle size={14} /> {criticalZonesCount} ZONE{criticalZonesCount > 1 ? 'S' : ''} UNDER CRITICAL STRESS
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flex: 1, gap: "24px", overflow: "hidden" }}>
+        {/* LEFT SIDEBAR */}
+        <div style={{ width: "240px", display: "flex", flexDirection: "column", gap: "20px", overflowY: "auto", paddingRight: "8px" }}>
+          <div style={{ fontSize: "10px", color: COLORS.dim, letterSpacing: "1px", fontWeight: "bold" }}>LIVE ZONE STATUS</div>
+          {zones.map(z => {
+            const avg = avgUtil(z.assets);
+            const color = statusColor(avg);
+            return (
+              <div 
+                key={z.id} 
+                onClick={() => setInput(`What is the status of ${z.name}?`)}
+                style={{ 
+                  backgroundColor: COLORS.card, 
+                  padding: "12px", 
+                  borderRadius: "8px", 
+                  border: `1px solid ${COLORS.border}`,
+                  cursor: "pointer",
+                  transition: "all 0.2s"
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: "bold" }}>{z.name}</div>
+                  <div style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: color }} />
+                </div>
+                <div style={{ fontSize: "10px", color: COLORS.dim }}>{Math.round(avg)}% avg utilization</div>
+              </div>
+            );
+          })}
+
+          <div style={{ marginTop: "10px", fontSize: "10px", color: COLORS.dim, letterSpacing: "1px", fontWeight: "bold" }}>EMERGENCY CONTACTS</div>
+          <div style={{ backgroundColor: COLORS.card, padding: "12px", borderRadius: "8px", border: `1px solid ${COLORS.border}`, fontSize: "11px" }}>
+            <div style={{ marginBottom: "8px" }}><span style={{ color: COLORS.accent }}>Helpline:</span> 1800-CITY-HELP</div>
+            <div style={{ marginBottom: "8px" }}><span style={{ color: COLORS.accent }}>Power:</span> 1800-PWR-ALERT</div>
+            <div style={{ marginBottom: "8px" }}><span style={{ color: COLORS.accent }}>Water:</span> 1800-WATER-911</div>
+            <div><span style={{ color: COLORS.accent }}>Medical:</span> 102</div>
+          </div>
+        </div>
+
+        {/* CHAT AREA */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", backgroundColor: COLORS.card, borderRadius: "16px", border: `1px solid ${COLORS.border}`, overflow: "hidden" }}>
+          {/* MESSAGES */}
+          <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: m.role === "assistant" ? "flex-start" : "flex-end" }}>
+                <div style={{ display: "flex", gap: "12px", maxWidth: "80%", flexDirection: m.role === "assistant" ? "row" : "row-reverse" }}>
+                  <div style={{ width: "32px", height: "32px", borderRadius: "50%", backgroundColor: COLORS.sidebar, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", flexShrink: 0 }}>
+                    {m.role === "assistant" ? "🏙️" : "👤"}
+                  </div>
+                  <div style={{ 
+                    padding: "12px 16px", 
+                    borderRadius: "16px", 
+                    backgroundColor: m.role === "assistant" ? COLORS.sidebar : "rgba(96, 165, 250, 0.1)",
+                    border: `1px solid ${m.role === "assistant" ? COLORS.border : "rgba(96, 165, 250, 0.2)"}`,
+                    color: COLORS.text,
+                    fontSize: "14px",
+                    lineHeight: "1.5",
+                    whiteSpace: "pre-wrap"
+                  }}>
+                    {m.content.split(/(\*\*.*?\*\*)/).map((part, idx) => {
+                      if (part.startsWith('**') && part.endsWith('**')) {
+                        return <strong key={idx}>{part.slice(2, -2)}</strong>;
+                      }
+                      return part;
+                    })}
+                  </div>
+                </div>
+                <div style={{ fontSize: "10px", color: COLORS.dim, marginTop: "4px", marginLeft: m.role === "assistant" ? "44px" : "0", marginRight: m.role === "assistant" ? "0" : "44px" }}>
+                  {m.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                <div style={{ width: "32px", height: "32px", borderRadius: "50%", backgroundColor: COLORS.sidebar, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px" }}>🏙️</div>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} style={{ width: "6px", height: "6px", backgroundColor: COLORS.dim, borderRadius: "50%", animation: "pulse 1.5s infinite", animationDelay: `${i * 0.2}s` }} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* QUICK REPLIES */}
+          <div style={{ padding: "12px 24px", borderTop: `1px solid ${COLORS.border}`, display: "flex", gap: "8px", overflowX: "auto", whiteSpace: "nowrap" }}>
+            {quickReplies.map((r, i) => (
+              <button 
+                key={i} 
+                onClick={() => handleSend(r)}
+                style={{ 
+                  padding: "6px 12px", 
+                  borderRadius: "20px", 
+                  backgroundColor: "transparent", 
+                  border: `1px solid ${COLORS.border}`, 
+                  color: COLORS.dim, 
+                  fontSize: "11px", 
+                  cursor: "pointer",
+                  transition: "all 0.2s"
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.borderColor = COLORS.accent; e.currentTarget.style.color = COLORS.text; }}
+                onMouseOut={(e) => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.dim; }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+
+          {/* INPUT AREA */}
+          <div style={{ padding: "24px", borderTop: `1px solid ${COLORS.border}` }}>
+            {showKeyInput && (
+              <div style={{ marginBottom: "16px", display: "flex", gap: "12px", alignItems: "center" }}>
+                <input 
+                  type="password" 
+                  placeholder="Enter Gemini API Key..." 
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  style={{ 
+                    flex: 1, 
+                    backgroundColor: COLORS.sidebar, 
+                    border: `1px solid ${COLORS.border}`, 
+                    borderRadius: "6px", 
+                    padding: "8px 12px", 
+                    color: COLORS.text, 
+                    fontSize: "12px" 
+                  }}
+                />
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ fontSize: "11px", color: COLORS.accent, textDecoration: "none" }}>Get API Key →</a>
+                <button onClick={() => setShowKeyInput(false)} style={{ background: "none", border: "none", color: COLORS.dim, cursor: "pointer", fontSize: "11px" }}>Hide</button>
+              </div>
+            )}
+            
+            {error && <div style={{ color: COLORS.critical, fontSize: "12px", marginBottom: "12px", padding: "8px", backgroundColor: `${COLORS.critical}11`, borderRadius: "4px", border: `1px solid ${COLORS.critical}33` }}>{error}</div>}
+
+            <div style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+              <textarea 
+                ref={textareaRef}
+                rows={1}
+                placeholder="Ask CityAssist about infrastructure..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = "auto";
+                  target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
+                }}
+                style={{ 
+                  flex: 1, 
+                  backgroundColor: COLORS.sidebar, 
+                  border: `1px solid ${COLORS.border}`, 
+                  borderRadius: "8px", 
+                  padding: "12px", 
+                  color: COLORS.text, 
+                  fontSize: "14px",
+                  resize: "none",
+                  maxHeight: "120px"
+                }}
+              />
+              <button 
+                onClick={() => handleSend()}
+                disabled={loading || !input.trim()}
+                style={{ 
+                  width: "44px", 
+                  height: "44px", 
+                  borderRadius: "8px", 
+                  backgroundColor: COLORS.accent, 
+                  border: "none", 
+                  color: COLORS.bg, 
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: loading || !input.trim() ? 0.5 : 1
+                }}
+              >
+                <TrendingUp size={20} style={{ transform: "rotate(90deg)" }} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
