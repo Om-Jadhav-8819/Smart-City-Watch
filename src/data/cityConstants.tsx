@@ -70,6 +70,15 @@ export const COLORS = {
   teal: "#14B8A6"
 };
 
+export const CUSTOM_ASSET_DEFAULTS = {
+  alertThreshold: 88,
+  reversionSpeedMin: 0.06,
+  reversionSpeedMax: 0.10,
+  noiseLevelMin: 2.0,
+  noiseLevelMax: 4.0,
+  correlation: 0.12
+};
+
 export const EVENT_LOADS = {
   none: { roads: 0, power: 0, water: 0, healthcare: 0 },
   concert: { roads: 22, power: 15, water: 8, healthcare: 5 },

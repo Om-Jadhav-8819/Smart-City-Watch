@@ -1,11 +1,35 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LogOut, AlertCircle, Clock, ChevronUp, User, Settings } from 'lucide-react';
+import { LogOut, AlertCircle, Clock, ChevronUp, User, Settings, LayoutDashboard, TrendingUp, Zap, Map, MessageSquare, Bell, CheckCircle, X } from 'lucide-react';
 import { COLORS } from '../../data/cityConstants';
-import SectionTitle from '../shared/SectionTitle';
 
-export default function AdminLayout({ children, activeView, setView, user, onSignOut, simHour, healthScore, criticalCount }: { children: React.ReactNode, activeView: string, setView: (v: string) => void, user: any, onSignOut: () => void, simHour: number, healthScore: number, criticalCount: number }) {
+interface AdminLayoutProps {
+  children: React.ReactNode;
+  activeView: string;
+  setView: (v: string) => void;
+  user: any;
+  onSignOut: () => void;
+  simHour: number;
+  healthScore: number;
+  criticalCount: number;
+  customAssets: any[];
+  customUtilizations: Record<string, number>;
+}
+
+export default function AdminLayout({ 
+  children, activeView, setView, user, onSignOut, simHour, healthScore, criticalCount,
+  customAssets, customUtilizations
+}: AdminLayoutProps) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [toasts, setToasts] = useState<any[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const addToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -17,12 +41,31 @@ export default function AdminLayout({ children, activeView, setView, user, onSig
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Listen for custom events for toast (from CRUD operations)
+  useEffect(() => {
+    let lastAuditId = '';
+    const interval = setInterval(() => {
+      const audit = JSON.parse(localStorage.getItem('cityvitals_audit') || '[]');
+      if (audit.length > 0 && audit[0].timestamp !== lastAuditId) {
+        lastAuditId = audit[0].timestamp;
+        const latest = audit[0];
+        if (latest.userName === user.name && latest.message) {
+          if (latest.message.includes('added')) addToast(latest.message, 'success');
+          if (latest.message.includes('deleted')) addToast(latest.message, 'warning');
+          if (latest.message.includes('updated')) addToast(latest.message, 'success');
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [user.name]);
+
   const navItems = [
-    { id: "dashboard",   label: "Live Dashboard",  icon: "◈" },
-    { id: "predictions", label: "Predictions",      icon: "◉" },
-    { id: "whatif",      label: "What-If Engine",   icon: "◇" },
-    { id: "zones",       label: "Zone Manager",     icon: "⊞" },
-    { id: "adminbot",    label: "AI Assistant",     icon: "🤖" }
+    { id: "dashboard",   label: "Live Dashboard",  icon: LayoutDashboard },
+    { id: "predictions", label: "Predictions",      icon: TrendingUp },
+    { id: "whatif",      label: "What-If Engine",   icon: Zap },
+    { id: "zones",       label: "Zone Manager",     icon: Map },
+    { id: "adminbot",    label: "AI Assistant",     icon: MessageSquare }
   ];
 
   const getHealthColor = (score: number) => {
@@ -31,16 +74,10 @@ export default function AdminLayout({ children, activeView, setView, user, onSig
     return COLORS.green;
   };
 
-  const getHealthLabel = (score: number) => {
-    if (score < 60) return "CRITICAL";
-    if (score < 80) return "STRESSED";
-    return "GOOD";
-  };
-
   const healthColor = getHealthColor(healthScore);
 
   return (
-    <div style={{ display: "flex", height: "100vh", backgroundColor: COLORS.bg, color: COLORS.text, overflow: "hidden" }}>
+    <div style={{ display: "flex", height: "100vh", backgroundColor: COLORS.bg, color: COLORS.text, overflow: "hidden", fontFamily: "'Inter', sans-serif" }}>
       {/* SIDEBAR */}
       <div style={{ width: "260px", backgroundColor: COLORS.sidebar, borderRight: `1px solid ${COLORS.border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
         <div style={{ padding: "24px 20px" }}>
@@ -74,7 +111,7 @@ export default function AdminLayout({ children, activeView, setView, user, onSig
                 marginBottom: "4px"
               }}
             >
-              <span style={{ fontSize: "18px" }}>{item.icon}</span>
+              <item.icon size={18} />
               {item.label}
             </button>
           ))}
@@ -190,10 +227,29 @@ export default function AdminLayout({ children, activeView, setView, user, onSig
           </div>
         </header>
 
-        <main style={{ flex: 1, overflowY: "auto", padding: "24px" }}>
+        <main style={{ flex: 1, overflowY: "auto", padding: "24px", position: "relative" }}>
           {children}
         </main>
       </div>
+
+      {/* TOAST SYSTEM */}
+      <div style={{ position: "fixed", bottom: "24px", right: "24px", display: "flex", flexDirection: "column", gap: "12px", zIndex: 2000 }}>
+        {toasts.map(toast => (
+          <div key={toast.id} style={{ 
+            minWidth: "300px", padding: "16px", borderRadius: "12px", backgroundColor: COLORS.card, border: `1px solid ${toast.type === 'error' ? COLORS.red : toast.type === 'warning' ? COLORS.amber : COLORS.blue}`,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: "12px", animation: "slideIn 0.3s ease-out"
+          }}>
+            {toast.type === 'success' ? <CheckCircle size={20} color={COLORS.green} /> : <AlertCircle size={20} color={toast.type === 'error' ? COLORS.red : COLORS.amber} />}
+            <div style={{ flex: 1, fontSize: "14px", fontWeight: "500" }}>{toast.message}</div>
+            <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} style={{ background: "none", border: "none", color: COLORS.dimText, cursor: "pointer" }}><X size={16} /></button>
+          </div>
+        ))}
+      </div>
+
+      <style>{`
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      `}</style>
     </div>
   );
 }

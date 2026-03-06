@@ -26,8 +26,16 @@ import CitizenBot from './components/public/CitizenBot';
 
 export default function App() {
   const { currentUser, isAuthenticated, authLoading, signOut, apiKey, setApiKey } = useAuth();
-  const { zones, simHour, history, resetSimulation, updateZone } = useSimulation();
-  const { cityHealthScore, criticalAssets, warningAssets, populationAtRisk, avgUtilByZone } = useCityData(zones);
+  const { 
+    zones, simHour, history, resetSimulation, updateZone,
+    customAssets, customUtilizations, customHistory,
+    addCustomAsset, updateCustomAsset, deleteCustomAsset
+  } = useSimulation();
+  
+  const { 
+    cityHealthScore, criticalAssets, warningAssets, populationAtRisk, avgUtilByZone,
+    customAssetAlerts
+  } = useCityData(zones, customAssets, customUtilizations);
 
   const [authView, setAuthView] = useState({ role: '', type: 'landing' });
   const [adminView, setAdminView] = useState('dashboard');
@@ -79,7 +87,9 @@ export default function App() {
         onSignOut={signOut}
         simHour={simHour}
         healthScore={cityHealthScore}
-        criticalCount={criticalAssets.length}
+        criticalCount={criticalAssets.length + customAssetAlerts.length}
+        customAssets={customAssets}
+        customUtilizations={customUtilizations}
       >
         {adminView === 'dashboard' && (
           <Dashboard 
@@ -89,11 +99,34 @@ export default function App() {
             warningAssets={warningAssets} 
             populationAtRisk={populationAtRisk}
             user={currentUser}
+            customAssets={customAssets}
+            customUtilizations={customUtilizations}
           />
         )}
-        {adminView === 'predictions' && <Predictions zones={zones} history={history} />}
+        {adminView === 'predictions' && (
+          <Predictions 
+            zones={zones} 
+            history={history} 
+            customAssets={customAssets}
+            customUtilizations={customUtilizations}
+            customHistory={customHistory}
+          />
+        )}
         {adminView === 'whatif' && <WhatIf zones={zones} />}
-        {adminView === 'zones' && <ZoneManager zones={zones} updateZone={updateZone} user={currentUser} />}
+        {adminView === 'zones' && (
+          <ZoneManager 
+            zones={zones} 
+            history={history}
+            updateZone={updateZone} 
+            user={currentUser}
+            customAssets={customAssets}
+            customUtilizations={customUtilizations}
+            customHistory={customHistory}
+            addCustomAsset={addCustomAsset}
+            updateCustomAsset={updateCustomAsset}
+            deleteCustomAsset={deleteCustomAsset}
+          />
+        )}
         {adminView === 'adminbot' && (
           <AdminBot 
             zones={zones} 
